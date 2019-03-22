@@ -4,45 +4,38 @@
 #include <queue>
 #include <mutex>
 #include <condition_variable>
-#include <cassert>
-#include <exception>
 
-class PooledThread {
-public:
-    PooledThread(std::condition_variable& poolCv);
-    void StartTask(std::function<void()>& task);
-    void Stop();
-    bool IsBusy();
+class PooledThread;
 
-private:
-    void Process();
-
-private:
-    std::mutex m_mutex;
-    std::condition_variable m_cv;
-    std::condition_variable& m_poolCv;
-    bool m_isBusy;
-    bool m_isProcessing;
-    std::thread m_thread;
-    std::function<void()> m_task;
-};
-
+/*!
+ * \brief The ThreadPool class is a pool of N threads which accepts tasks and assigns them to separate threads.
+ */
 class ThreadPool
 {
 public:
-    ThreadPool(unsigned int threads);
+    ThreadPool(std::size_t threads);
+    ~ThreadPool();
 
+    //! Starts task processing in this thread pool.
     void Start();
+
+    //! Stops the processing of tasks in this pool. Blocks the caller thread untill all tasks that were still processing are completed.
+    void Stop();
+
+    //! AssignTask assigns a task to this thread pool. The task will be executed as soon as a free thread is available.
     void AssignTask(std::function<void()> task);
+
+    //! Blocks the caller thread untill all tasks from the queue are completed.
     void WaitForAll();
 
 private:
-    void HandleTasks();
     PooledThread* GetFreeThread();
+    bool IsBusy();
+    void HandleTasks();
 
 private:
     bool m_processing = true;
-    const unsigned int threadsMax;
+    const std::size_t threadsMax;
     std::mutex m_taskMutex;
     std::condition_variable m_taskCv;
     std::mutex m_poolMutex;

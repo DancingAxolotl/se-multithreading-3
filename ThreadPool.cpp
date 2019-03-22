@@ -1,52 +1,42 @@
 #include "ThreadPool.h"
+#include "PooledThread.h"
+#include <cassert>
+#include <exception>
+#include <iostream>
 
-PooledThread::PooledThread(std::condition_variable& poolCv)
-    : m_poolCv(poolCv)
-    , m_isBusy(false)
-    , m_isProcessing(true)
-{
-    m_thread = std::thread(&PooledThread::Process, this);
-}
-
-void PooledThread::StartTask(std::function<void()>& task) {
-    assert(!m_isBusy);
-    std::lock_guard<std::mutex> lk(m_mutex);
-    m_isBusy = true;
-    m_task = task;
-    m_cv.notify_one();
-}
-
-void PooledThread::Stop() {
-    assert(!m_isBusy);
-    std::lock_guard<std::mutex> lk(m_mutex);
-    m_isProcessing = false;
-    m_cv.notify_one();
-}
-
-bool PooledThread::IsBusy() {
-    return m_isBusy;
-}
-
-void PooledThread::Process() {
-    while (m_isProcessing) {
-        std::unique_lock<std::mutex> lk(m_mutex);
-        m_cv.wait(lk);
-        if (!m_isBusy) continue;
-        if (!m_isProcessing) return;
-        m_task();
-        m_isBusy = false;
-        m_poolCv.notify_all();
-    }
-}
-
-ThreadPool::ThreadPool(unsigned int threads)
+ThreadPool::ThreadPool(std::size_t threads)
     : threadsMax(threads)
 {
+}
+
+ThreadPool::~ThreadPool()
+{
+    try {
+        Stop();
+        for (size_t i = 0; i < m_pool.size(); ++i)
+        {
+            delete m_pool[i];
+        }
+    } catch (const std::exception) {
+        std::cout << "Failed to safely stop pooled threads.";
+    }
 }
 
 void ThreadPool::Start()
 {
     m_managerThread = std::thread(&ThreadPool::HandleTasks, this);
+}
+
+void ThreadPool::Stop()
+{
+    m_processing = false;
+    std::queue<std::function<void()>>().swap(m_tasks); // clear the tasks queue by swapping with an empty queue
+    m_taskCv.notify_one();
+    WaitForAll();
+    for (auto thread : m_pool) {
+        thread->Stop();
+    }
+    m_managerThread.join();
 }
 
 void ThreadPool::AssignTask(std::function<void()> task)
@@ -58,56 +48,82 @@ void ThreadPool::AssignTask(std::function<void()> task)
     m_taskCv.notify_one();
 }
 
+void ThreadPool::WaitForAll()
+{
+    while (IsBusy())
+    {
+        std::unique_lock<std::mutex> lk(m_poolMutex);
+        m_poolCv.wait(lk);
+    }
+}
+
 PooledThread* ThreadPool::GetFreeThread()
 {
-    for (auto thread : m_pool) {
-        if (!thread->IsBusy()) {
+    for (auto thread : m_pool)
+    {
+        if (!thread->IsBusy())
+        {
             return  thread;
         }
     }
     return nullptr;
 }
 
-void ThreadPool::WaitForAll()
+bool ThreadPool::IsBusy()
 {
-    bool allFree = false;
-    while (!allFree) {
-        std::unique_lock<std::mutex> lk(m_poolMutex);
-        m_poolCv.wait(lk);
-        allFree = true;
-        for (auto& thread : m_pool) {
-            if (thread->IsBusy()) {
-                allFree = false;
-                break;
-            }
+    if (!m_tasks.empty())
+    {
+        return true;
+    }
+
+    bool allFree = true;
+    for (size_t i = 0; i < m_pool.size() && allFree; ++i)
+    {
+        if (m_pool[i]->IsBusy())
+        {
+            allFree = false;
         }
     }
+    return !allFree;
 }
 
 void ThreadPool::HandleTasks()
 {
-    while(m_processing) {
-        std::unique_lock<std::mutex> lk(m_taskMutex);
+    while(m_processing)
+    {
+        std::unique_lock<std::mutex> taskLock(m_taskMutex);
         if (m_tasks.empty())
         {
-            m_taskCv.wait(lk);
+            // wait for a task to appear
+            m_taskCv.wait(taskLock);
         }
+        else
+        {
+            std::function<void()> task = m_tasks.front();
 
-        std::function<void()> task = m_tasks.front();
-
-        PooledThread* freeThread = GetFreeThread();
-        if (freeThread != nullptr) {
-            freeThread->StartTask(task);
-            m_tasks.pop();
-        } else {
-            if (m_pool.size() < threadsMax) {
-                m_pool.push_back(new PooledThread(m_poolCv));
-                m_pool.back()->StartTask(task);
+            PooledThread* freeThread = GetFreeThread();
+            if (freeThread != nullptr)
+            {
+                // send the task to a free thread
+                freeThread->StartTask(task);
                 m_tasks.pop();
-            } else {
-                lk.unlock();
-                std::unique_lock<std::mutex> lk(m_poolMutex);
-                m_poolCv.wait(lk);
+            }
+            else
+            {
+                if (m_pool.size() < threadsMax)
+                {
+                    // create a new thread to execute
+                    m_pool.push_back(new PooledThread(m_poolCv));
+                    m_pool.back()->StartTask(task);
+                    m_tasks.pop();
+                }
+                else
+                {
+                    // wait for a thread to free up
+                    taskLock.unlock();
+                    std::unique_lock<std::mutex> poolLock(m_poolMutex);
+                    m_poolCv.wait(poolLock);
+                }
             }
         }
     }

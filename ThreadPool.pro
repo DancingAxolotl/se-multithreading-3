@@ -5,7 +5,9 @@ CONFIG -= qt
 
 SOURCES += \
         main.cpp \
-    ThreadPool.cpp
+    ThreadPool.cpp \
+    PooledThread.cpp
 
 HEADERS += \
-    ThreadPool.h
+    ThreadPool.h \
+    PooledThread.h
