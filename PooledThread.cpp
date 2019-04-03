@@ -10,25 +10,34 @@ PooledThread::PooledThread(std::condition_variable& poolCv)
     m_thread = std::thread(&PooledThread::Process, this);
 }
 
-void PooledThread::StartTask(std::function<void()>& task)
+PooledThread::PooledThread(std::condition_variable& poolCv, std::function<void()>& task)
+    : m_poolCv(poolCv)
+    , m_isBusy(true)
+    , m_isProcessing(true)
+{
+    m_task = task;
+    m_thread = std::thread(&PooledThread::Process, this);
+}
+
+void PooledThread::AssignTask(std::function<void()>& task)
 {
     assert(!m_isBusy);
     {
-        std::lock_guard<std::mutex> lk(m_mutex);
+        std::lock_guard<std::mutex> lk(m_taskMutex);
         m_isBusy = true;
         m_task = task;
     }
-    m_cv.notify_one();
+    m_taskCv.notify_one();
 }
 
 void PooledThread::Stop()
 {
     assert(!m_isBusy);
     {
-        std::lock_guard<std::mutex> lk(m_mutex);
+        std::lock_guard<std::mutex> taskLock(m_taskMutex);
         m_isProcessing = false;
     }
-    m_cv.notify_one();
+    m_taskCv.notify_one();
     m_thread.join();
 }
 
@@ -39,14 +48,15 @@ bool PooledThread::IsBusy()
 
 void PooledThread::Process()
 {
+    std::unique_lock<std::mutex> taskLock(m_taskMutex);
     while (m_isProcessing)
     {
-        std::unique_lock<std::mutex> lk(m_mutex);
-        m_poolCv.notify_all();
-        m_cv.wait(lk);
-        if (!m_isBusy) continue;
-        if (!m_isProcessing) return;
-        m_task();
-        m_isBusy = false;
+        if (m_isBusy)
+        {
+            m_task();
+            m_isBusy = false;
+            m_poolCv.notify_all();
+        }
+        m_taskCv.wait(taskLock);
     }
 }

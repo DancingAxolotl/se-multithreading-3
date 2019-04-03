@@ -32,6 +32,7 @@ private:
     PooledThread* GetFreeThread();
     bool IsBusy();
     void HandleTasks();
+    bool AssignToThread(std::function<void()>& task);
 
 private:
     bool m_processing = true;

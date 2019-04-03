@@ -92,39 +92,43 @@ void ThreadPool::HandleTasks()
     while(m_processing)
     {
         std::unique_lock<std::mutex> taskLock(m_taskMutex);
-        if (m_tasks.empty())
-        {
-            // wait for a task to appear
-            m_taskCv.wait(taskLock);
-        }
-        else
+        if (!m_tasks.empty())
         {
             std::function<void()> task = m_tasks.front();
-
-            PooledThread* freeThread = GetFreeThread();
-            if (freeThread != nullptr)
-            {
-                // send the task to a free thread
-                freeThread->StartTask(task);
+            std::unique_lock<std::mutex> poolLock(m_poolMutex);
+            if (AssignToThread(task)) {
+                // we managed to deal with the task
                 m_tasks.pop();
             }
             else
             {
-                if (m_pool.size() < threadsMax)
-                {
-                    // create a new thread to execute
-                    m_pool.push_back(new PooledThread(m_poolCv));
-                    m_pool.back()->StartTask(task);
-                    m_tasks.pop();
-                }
-                else
-                {
-                    // wait for a thread to free up
-                    taskLock.unlock();
-                    std::unique_lock<std::mutex> poolLock(m_poolMutex);
-                    m_poolCv.wait(poolLock);
-                }
+                // wait for a free thread
+                taskLock.unlock();
+                m_poolCv.wait(poolLock);
             }
         }
+        else
+        {
+            // wait for a task to appear
+            m_taskCv.wait(taskLock);
+        }
     }
+}
+
+bool ThreadPool::AssignToThread(std::function<void()>& task)
+{
+    PooledThread* freeThread = GetFreeThread();
+    if (freeThread != nullptr)
+    {
+        // send the task to a free thread
+        freeThread->AssignTask(task);
+        return true;
+    }
+    if (m_pool.size() < threadsMax)
+    {
+        // create a new thread to execute
+        m_pool.push_back(new PooledThread(m_poolCv, task));
+        return true;
+    }
+    return false;
 }
