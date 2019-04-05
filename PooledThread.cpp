@@ -14,8 +14,8 @@ PooledThread::PooledThread(std::condition_variable& poolCv, std::function<void()
     : m_poolCv(poolCv)
     , m_isBusy(true)
     , m_isProcessing(true)
+    , m_task(std::move(task))
 {
-    m_task = task;
     m_thread = std::thread(&PooledThread::Process, this);
 }
 
@@ -25,7 +25,7 @@ void PooledThread::AssignTask(std::function<void()>& task)
     {
         std::lock_guard<std::mutex> lk(m_taskMutex);
         m_isBusy = true;
-        m_task = task;
+        m_task = std::move(task);
     }
     m_taskCv.notify_one();
 }

@@ -10,4 +10,5 @@ SOURCES += \
 
 HEADERS += \
     ThreadPool.h \
-    PooledThread.h
+    PooledThread.h \
+    TaskWrapper.h

@@ -22,7 +22,6 @@ public:
 
 private:
     void Process();
-
 private:
     std::mutex m_taskMutex;
     std::condition_variable m_taskCv;
